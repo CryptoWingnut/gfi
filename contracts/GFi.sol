@@ -15,13 +15,15 @@ contract GorillaFi is IERC20, Ownable {
     string      public name         = "GorillaFi";      // Token name
     string      public symbol       = "G-Fi";           // Token symbol
     uint8       public decimals     = 18;               // Token decimals
-    uint256     public taxFee       = 5;                // The reflection tax rate    
+    uint256     public taxFee       = 4;                // The reflection tax rate    
     uint256     public liquidityFee = 5;                // The liquidity tax rate
+    uint256     public marketingTax = 1;                // The marketing tax rate
     bool        public swapAndLiquifyEnabled = true;    // Flag for if LP taxes is enabled
     bool        public transferTaxEnabled = true;       // Flag for if the transfer tax is enabled
     address     public dexPair;                         // The DEX pair to add liquidity to
     IERC20      public cake;                            // The CAKE token
-    address     public treasury;                        // The treasury address for sending LP tokens    
+    address     public lpStorage;                       // The address for sending LP tokens
+    address     public treasury;                        // The treasury for sending marketing tax to  
 
     address[]   private excluded;                       // Array of addresses excluded from rewards
 
@@ -38,6 +40,7 @@ contract GorillaFi is IERC20, Ownable {
     // Variables to store tax rates while doing notax operations
     uint256 private previousTaxFee = taxFee;
     uint256 private previousLiquidityFee = liquidityFee;    
+    uint256 private previousMarketingTax = marketingTax;
 
     // Balance mappings
     mapping (address => uint256) private rOwned;
@@ -63,6 +66,7 @@ contract GorillaFi is IERC20, Ownable {
     // Constructor for constructing things
     constructor (address _dexRouter, address _cake) {
         cake = IERC20(_cake);
+        lpStorage = owner();
         treasury = owner();
 
         rOwned[msg.sender] = rTotal;
@@ -82,6 +86,11 @@ contract GorillaFi is IERC20, Ownable {
     function setDex(address _dexRouter, address _dexPair) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
         dexPair = _dexPair;
+    }
+
+    // Function to set the LP storage address
+    function setLPStorage(address _lpStorage) public onlyOwner() {
+        lpStorage = _lpStorage;
     }
 
     // Function to set the treasury address
@@ -105,17 +114,22 @@ contract GorillaFi is IERC20, Ownable {
     }
     
     // Function to set the tax percent
-    function setTaxFeePercent(uint256 _taxFee) external onlyOwner() {
+    function setTaxFeePercent(uint256 _taxFee) public onlyOwner() {
         taxFee = _taxFee;
     }
     
     // Function to set the liquidity percentage
-    function setLiquidityFeePercent(uint256 _liquidityFee) external onlyOwner() {
+    function setLiquidityFeePercent(uint256 _liquidityFee) public onlyOwner() {
         liquidityFee = _liquidityFee;
+    }
+
+    // Function to set the marketing tax percentage
+    function setMarketingTax(uint256 _marketingTax) public onlyOwner() {
+        marketingTax = _marketingTax;
     }
    
     // Function to set the max transfer size
-    function setMaxTxPercent(uint256 _maxTxPercent) external onlyOwner() {
+    function setMaxTxPercent(uint256 _maxTxPercent) public onlyOwner() {
         maxTxAmount = tTotal * _maxTxPercent / (10**2);
     }
 
@@ -208,7 +222,7 @@ contract GorillaFi is IERC20, Ownable {
     function deliver(uint256 _tAmount) public {
         address sender = msg.sender;
         require(!isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,) = _getValues(_tAmount);
+        (uint256 rAmount,,,,,,) = _getValues(_tAmount);
         rOwned[sender] = rOwned[sender] - rAmount;
         rTotal = rTotal - rAmount;
         tFeeTotal = tFeeTotal + _tAmount;
@@ -218,10 +232,10 @@ contract GorillaFi is IERC20, Ownable {
     function reflectionFromToken(uint256 _tAmount, bool _deductTransferFee) public view returns(uint256) {
         require(_tAmount <= tTotal, "Amount must be less than supply");
         if (!_deductTransferFee) {
-            (uint256 rAmount,,,,,) = _getValues(_tAmount);
+            (uint256 rAmount,,,,,,) = _getValues(_tAmount);
             return rAmount;
         } else {
-            (,uint256 rTransferAmount,,,,) = _getValues(_tAmount);
+            (,uint256 rTransferAmount,,,,,) = _getValues(_tAmount);
             return rTransferAmount;
         }
     }
@@ -240,26 +254,30 @@ contract GorillaFi is IERC20, Ownable {
     }
 
     // Function to calculate the values
-    function _getValues(uint256 _tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getTValues(_tAmount);
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(_tAmount, tFee, tLiquidity, _getRate());
-        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity);
+    function _getValues(uint256 _tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tMarketing) = _getTValues(_tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = 
+            _getRValues(_tAmount, tFee, tLiquidity, tMarketing, _getRate());
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity, tMarketing);
     }
 
     // Function to calculate the 't' values
-    function _getTValues(uint256 _tAmount) private view returns (uint256, uint256, uint256) {
+    function _getTValues(uint256 _tAmount) private view returns (uint256, uint256, uint256, uint256) {
         uint256 tFee = _calculateTaxFee(_tAmount);
         uint256 tLiquidity = _calculateLiquidityFee(_tAmount);
-        uint256 tTransferAmount = _tAmount - tFee - tLiquidity;
-        return (tTransferAmount, tFee, tLiquidity);
+        uint256 tMarketing = _calculateMarketingTax(_tAmount);
+        uint256 tTransferAmount = _tAmount - tFee - tLiquidity - tMarketing;
+        return (tTransferAmount, tFee, tLiquidity, tMarketing);
     }
 
     // Function to calculate the 'r' values
-    function _getRValues(uint256 _tAmount, uint256 _tFee, uint256 _tLiquidity, uint256 _currentRate) private pure returns (uint256, uint256, uint256) {
+    function _getRValues(uint256 _tAmount, uint256 _tFee, uint256 _tLiquidity, uint256 _tMarketing, uint256 _currentRate) 
+            private pure returns (uint256, uint256, uint256) {
         uint256 rAmount = _tAmount * _currentRate;
         uint256 rFee = _tFee * _currentRate;
         uint256 rLiquidity = _tLiquidity * _currentRate;
-        uint256 rTransferAmount = rAmount - rFee - rLiquidity;
+        uint256 rMarketing = _tMarketing * _currentRate;
+        uint256 rTransferAmount = rAmount - rFee - rLiquidity - rMarketing;
         return (rAmount, rTransferAmount, rFee);
     }
 
@@ -290,32 +308,53 @@ contract GorillaFi is IERC20, Ownable {
         if(isExcluded[address(this)])
             tOwned[address(this)] = tOwned[address(this)] + _tLiquidity;
     }
+
+    // Function to tax marketing tax
+    function _takeMarketing(uint256 _tMarketing) private {
+        uint256 startBalance = balanceOf(address(this));
+        uint256 currentRate =  _getRate();
+        uint256 rMarketing = _tMarketing * currentRate;
+        rOwned[address(this)] = rOwned[address(this)] + rMarketing;
+        if (isExcluded[address(this)])
+            tOwned[address(this)] = tOwned[address(this)] + _tMarketing;
+        uint256 received = balanceOf(address(this)) - startBalance;
+        _swapTokensForCake(received);
+        cake.transfer(treasury, cake.balanceOf(address(this)));
+    }
     
     // Function to calculate the tax fee
     function _calculateTaxFee(uint256 _amount) private view returns (uint256) {
-        return _amount * taxFee / (10**2);
+        return _amount * taxFee / (10 ** 2);
     }
 
     // Function to calculate the liquidity fee
     function _calculateLiquidityFee(uint256 _amount) private view returns (uint256) {
-        return _amount * liquidityFee / (10**2);
+        return _amount * liquidityFee / (10 ** 2);
+    }
+
+    // Function to calculate the marketing tax
+    function _calculateMarketingTax(uint256 _amount) private view returns (uint256) {
+        return _amount * marketingTax / (10 ** 2);
     }
     
     // Function to set all tax rates to zero
     function _removeAllFee() private {
-        if(taxFee == 0 && liquidityFee == 0) return;
+        if(taxFee == 0 && liquidityFee == 0 && marketingTax == 0) return;
         
         previousTaxFee = taxFee;
         previousLiquidityFee = liquidityFee;
+        previousMarketingTax = marketingTax;
         
         taxFee = 0;
         liquidityFee = 0;
+        marketingTax = 0;
     }
     
     // Function to restore the tax rates
     function _restoreAllFee() private {
         taxFee = previousTaxFee;
         liquidityFee = previousLiquidityFee;
+        marketingTax = previousMarketingTax;
     }
 
     // Function to handle approvals
@@ -405,7 +444,7 @@ contract GorillaFi is IERC20, Ownable {
             _cakeAmount, 
             0, 
             0, 
-            treasury, 
+            lpStorage, 
             block.timestamp);
     }
 
@@ -432,49 +471,54 @@ contract GorillaFi is IERC20, Ownable {
 
     // Function for handling standard transfers
     function _transferStandard(address _sender, address _recipient, uint256 _tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = 
-            _getValues(_tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, 
+            uint256 tLiquidity, uint256 tMarketing) = _getValues(_tAmount);
+
         rOwned[_sender] = rOwned[_sender] - rAmount;
         rOwned[_recipient] = rOwned[_recipient] + rTransferAmount;
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeMarketing(tMarketing);
         emit Transfer(_sender, _recipient, tTransferAmount);
     }
 
     // Function for handling transferring to an excluded address
     function _transferToExcluded(address _sender, address _recipient, uint256 _tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = 
-            _getValues(_tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, 
+            uint256 tLiquidity, uint256 tMarketing) = _getValues(_tAmount);
         rOwned[_sender] = rOwned[_sender] - rAmount;
         tOwned[_recipient] = tOwned[_recipient] + tTransferAmount;
         rOwned[_recipient] = rOwned[_recipient] + rTransferAmount;
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeMarketing(tMarketing);
         emit Transfer(_sender, _recipient, tTransferAmount);
     }
 
     // Function for handling transferring from and excluded address
     function _transferFromExcluded(address _sender, address _recipient, uint256 _tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = 
-            _getValues(_tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, 
+            uint256 tLiquidity, uint256 tMarketing) = _getValues(_tAmount);
         tOwned[_sender] = tOwned[_sender] - _tAmount;
         rOwned[_sender] = rOwned[_sender] - rAmount;
         rOwned[_recipient] = rOwned[_recipient] + rTransferAmount;
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeMarketing(tMarketing);
         emit Transfer(_sender, _recipient, tTransferAmount);
     }
 
     // Function for performing a transfer when both parties are excluded        
     function _transferBothExcluded(address _sender, address _recipient, uint256 _tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) =
-             _getValues(_tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, 
+            uint256 tLiquidity, uint256 tMarketing) = _getValues(_tAmount);
         tOwned[_sender] = tOwned[_sender] - _tAmount;
         rOwned[_sender] = rOwned[_sender] - rAmount;
         tOwned[_recipient] = tOwned[_recipient] + tTransferAmount;
         rOwned[_recipient] = rOwned[_recipient] + rTransferAmount;
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
+        _takeMarketing(tMarketing);
         emit Transfer(_sender, _recipient, tTransferAmount);
     }
 }
