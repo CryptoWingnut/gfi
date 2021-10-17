@@ -18,11 +18,9 @@ contract GorillaFi is IERC20, Ownable {
     uint256     public taxFee       = 4;                // The reflection tax rate    
     uint256     public liquidityFee = 5;                // The liquidity tax rate
     uint256     public marketingTax = 1;                // The marketing tax rate
-    bool        public swapAndLiquifyEnabled = true;    // Flag for if LP taxes is enabled
     bool        public transferTaxEnabled = true;       // Flag for if the transfer tax is enabled
     address     public dexPair;                         // The DEX pair to add liquidity to
     IERC20      public cake;                            // The CAKE token
-    address     public lpStorage;                       // The address for sending LP tokens
     address     public treasury;                        // The treasury for sending marketing tax to  
 
     address[]   private excluded;                       // Array of addresses excluded from rewards
@@ -32,9 +30,7 @@ contract GorillaFi is IERC20, Ownable {
     uint256 private tTotal = 100000000 * 10 ** uint256(decimals); // Total supply of the token
     uint256 private rTotal = (MAX - (MAX % tTotal));    // Total reflections
     uint256 private tFeeTotal;                          // The total fees
-    bool    private inSwapAndLiquify;                   // Flag for if we are in a liquidy process 
-    uint256 private numTokensSellToAddToLiquidity = 500000 * 10**6 * (10**uint256(decimals));   
-
+    
     IUniswapV2Router02 public dexRouter;                // The DEX router for performing swaps
 
     // Variables to store tax rates while doing notax operations
@@ -56,18 +52,10 @@ contract GorillaFi is IERC20, Ownable {
     event SwapAndLiquifyEnabledUpdated(bool _enabled);
     event SwapAndLiquify(uint256 _tokensSwapped, uint256 _ethReceived, uint256 _tokensIntoLiqudity);
     
-    // Modifier to prevent swap loops
-    modifier lockTheSwap {
-        inSwapAndLiquify = true;
-        _;
-        inSwapAndLiquify = false;
-    }
-    
     // Constructor for constructing things
     constructor (address _dexRouter, address _cake) {
         cake = IERC20(_cake);
-        lpStorage = owner();
-        treasury = owner();
+        treasury = msg.sender;
 
         rOwned[msg.sender] = rTotal;
         
@@ -76,6 +64,7 @@ contract GorillaFi is IERC20, Ownable {
         
         isExcludedFromFee[owner()] = true;
         isExcludedFromFee[address(this)] = true;
+        isExcludedFromFee[treasury];
         
         emit Transfer(address(0), msg.sender, tTotal);
     }
@@ -86,11 +75,6 @@ contract GorillaFi is IERC20, Ownable {
     function setDex(address _dexRouter, address _dexPair) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
         dexPair = _dexPair;
-    }
-
-    // Function to set the LP storage address
-    function setLPStorage(address _lpStorage) public onlyOwner() {
-        lpStorage = _lpStorage;
     }
 
     // Function to set the treasury address
@@ -131,12 +115,6 @@ contract GorillaFi is IERC20, Ownable {
     // Function to set the max transfer size
     function setMaxTxPercent(uint256 _maxTxPercent) public onlyOwner() {
         maxTxAmount = tTotal * _maxTxPercent / (10**2);
-    }
-
-    // Function to set if the liquidity swap is enabled
-    function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner() {
-        swapAndLiquifyEnabled = _enabled;
-        emit SwapAndLiquifyEnabledUpdated(_enabled);
     }
 
     // Function to exclude an address from getting rewards
@@ -304,22 +282,18 @@ contract GorillaFi is IERC20, Ownable {
     function _takeLiquidity(uint256 _tLiquidity) private {
         uint256 currentRate =  _getRate();
         uint256 rLiquidity = _tLiquidity * currentRate;
-        rOwned[address(this)] = rOwned[address(this)] + rLiquidity;
-        if(isExcluded[address(this)])
-            tOwned[address(this)] = tOwned[address(this)] + _tLiquidity;
+        rOwned[treasury] = rOwned[treasury] + rLiquidity;
+        if(isExcluded[treasury])
+            tOwned[treasury] = tOwned[treasury] + _tLiquidity;
     }
 
     // Function to tax marketing tax
     function _takeMarketing(uint256 _tMarketing) private {
-        uint256 startBalance = balanceOf(address(this));
         uint256 currentRate =  _getRate();
         uint256 rMarketing = _tMarketing * currentRate;
-        rOwned[address(this)] = rOwned[address(this)] + rMarketing;
-        if (isExcluded[address(this)])
-            tOwned[address(this)] = tOwned[address(this)] + _tMarketing;
-        uint256 received = balanceOf(address(this)) - startBalance;
-        _swapTokensForCake(received);
-        cake.transfer(treasury, cake.balanceOf(address(this)));
+        rOwned[treasury] = rOwned[treasury] + rMarketing;
+        if (isExcluded[treasury])
+            tOwned[treasury] = tOwned[treasury] + _tMarketing;        
     }
     
     // Function to calculate the tax fee
@@ -374,24 +348,7 @@ contract GorillaFi is IERC20, Ownable {
         if(_from != owner() && _to != owner()) {
             require(_amount <= maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
         }
-            
-        uint256 contractTokenBalance = balanceOf(address(this));
-        
-        if(contractTokenBalance >= maxTxAmount) {
-            contractTokenBalance = maxTxAmount;
-        }
-        
-        bool overMinTokenBalance = contractTokenBalance >= numTokensSellToAddToLiquidity;
-        if (
-            overMinTokenBalance &&
-            !inSwapAndLiquify &&
-            _from != dexPair &&
-            swapAndLiquifyEnabled
-        ) {
-            contractTokenBalance = numTokensSellToAddToLiquidity;
-            _swapAndLiquify(contractTokenBalance);
-        }
-        
+
         bool takeFee = true;
         
         if(!transferTaxEnabled || isExcludedFromFee[_from] || isExcludedFromFee[_to]){
@@ -399,53 +356,6 @@ contract GorillaFi is IERC20, Ownable {
         }
         
         _tokenTransfer(_from, _to, _amount, takeFee);
-    }
-
-    // Function to handle the swap and liquify
-    function _swapAndLiquify(uint256 _contractTokenBalance) private lockTheSwap {
-        uint256 half = _contractTokenBalance / 2;
-        uint256 otherHalf = _contractTokenBalance - half;
-
-        uint256 initialBalance = cake.balanceOf(address(this));
-
-        _swapTokensForCake(half);
-        uint256 newBalance = cake.balanceOf(address(this)) - initialBalance;
-
-        _addLiquidity(otherHalf, newBalance);        
-        emit SwapAndLiquify(half, newBalance, otherHalf);
-    }
-
-    // Function to handle swapping tokens for CAKE
-    function _swapTokensForCake(uint256 _tokenAmount) private {
-        address[] memory path = new address[](2);
-        path[0] = address(this);
-        path[1] = address(cake);
-
-        _approve(address(this), address(dexRouter), _tokenAmount);
-
-        dexRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-            _tokenAmount,
-            0,
-            path,
-            address(this),
-            block.timestamp
-        );
-    }
-
-    // Function to add the liquidity
-    function _addLiquidity(uint256 _tokenAmount, uint256 _cakeAmount) private {
-        _approve(address(this), address(dexRouter), _tokenAmount);
-        cake.approve(address(dexRouter), _cakeAmount);
-
-        dexRouter.addLiquidity(
-            address(this), 
-            address(cake), 
-            _tokenAmount, 
-            _cakeAmount, 
-            0, 
-            0, 
-            lpStorage, 
-            block.timestamp);
     }
 
     // Function to handle transfers based on fees

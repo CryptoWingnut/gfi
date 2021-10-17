@@ -12,7 +12,7 @@ module.exports = {
             mnemonic,
             'http://127.0.0.1:8545',
             0,
-            2,
+            3,
             false
         )
         return wallet
