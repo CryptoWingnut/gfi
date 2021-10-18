@@ -4,7 +4,7 @@ const { time } = require('@openzeppelin/test-helpers');
 
 require('chai').use(require('chai-as-promised')).should();
 
-const GFi = artifacts.require('GorillaFi');
+const GFi = artifacts.require('CakeApe');
 const Cake = artifacts.require('FakeCake');
 const DexRouter = artifacts.require('IUniswapV2Router02');
 const DexFactory = artifacts.require('IUniswapV2Factory');
@@ -16,9 +16,9 @@ function tokens(n) {
     return web3.utils.toWei(n, 'Ether');
 }
 
-contract('G-Fi Token', ([ deployer, user1, user2 ]) => {
+contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
     let gfi, cake, dexrouter, dexfactory, gfi_pair, cake_pair;
-    let user1_gfi, user2_gfi, treasury_gfi;
+    let user1_gfi, user2_gfi, treasury_cake, lpstore_cake, lpstore_gfi, treasury_cake_old, lpstore_cake_old, lpstore_gfi_old;
     let result, temp;
     let transactionCount1 = 0, transactionCount2 = 0, transactionCount3 = 0;
     let BN = web3.utils.BN;
@@ -41,14 +41,20 @@ contract('G-Fi Token', ([ deployer, user1, user2 ]) => {
         user1_gfi = new BN(result.toString());
         result = await gfi.balanceOf(user2);
         user2_gfi = new BN(result.toString());  
-        result = await gfi.balanceOf(deployer);
-        treasury_gfi = new BN(result.toString()); 
+        result = await cake.balanceOf(treasury);
+        treasury_cake = new BN(result.toString()); 
+        result = await cake.balanceOf(lpstore);
+        lpstore_cake = new BN(result.toString());
+        result = await gfi.balanceOf(lpstore);
+        lpstore_gfi = new BN(result.toString());
     }
 
     async function printBalances() {
-        console.log("User 1   : " + user1_gfi.toString());
-        console.log("User 2   : " + user2_gfi.toString());
-        console.log("Treasury : " + treasury_gfi.toString());
+        console.log("User 1 GFI    : " + user1_gfi.toString());
+        console.log("User 2 GFI    : " + user2_gfi.toString());
+        console.log("Treasury CAKE : " + treasury_cake.toString());
+        console.log("LPStore CAKE  : " + lpstore_cake.toString());
+        console.log("LPSTORE GFI   : " + lpstore_gfi.toString());
     }
 
     describe('G-Fi Token Test Script', async() => {
@@ -70,7 +76,7 @@ contract('G-Fi Token', ([ deployer, user1, user2 ]) => {
                     { value: tokens('1'), nonce: await nonce(deployer) });
             });
             it('5. Deploy the G-Fi token', async() => {       
-                gfi = await GFi.new(DEXROUTER, cake.address, { nonce: await nonce(deployer) });
+                gfi = await GFi.new(DEXROUTER, cake.address, treasury, lpstore, { nonce: await nonce(deployer) });
                 gfi_pair = await gfi.dexPair();
             });
             it('6. Mint 1,000,000 CAKE and pair with 50,000,000 G-Fi', async() => {       
@@ -86,17 +92,84 @@ contract('G-Fi Token', ([ deployer, user1, user2 ]) => {
             it('8. Check all starting balances', async() => {       
                 await updateBalances();
                 assert.equal(user1_gfi.toString(), new BN(tokens('50000000').toString()), 'User 1 does not have 50,000,000 GFI');
-                assert.equal(user2_gfi, 0, 'User 2 does not have 0 GFI');                
-                assert.equal(treasury_gfi, 0, 'Treasury does not have 0 GFI');                
             });
         });
 
         describe('Basic Test Routine', async() => {
-            it('1. User 1 can transfer 10,000,000 tokens to user 2', async() => {                       
+            it('1. User 1 can transfer 10,000,000 tokens to user 2 - taxes taken', async() => {  
                 await gfi.transfer(user2, tokens('10000000'), { from: user1, nonce: await nonce(user1) });
+                treasury_cake_old = treasury_cake;
+                lpstore_cake_old = lpstore_cake;
+                lpstore_gfi_old = lpstore_gfi;
                 await updateBalances();
+                assert.isTrue(treasury_cake.gte(treasury_cake_old), 'Treasury did not receive CAKE');
+                assert.isTrue(lpstore_cake.gte(lpstore_cake_old), 'LP store did not receive CAKE');
+                assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
+                assert.isTrue(user1_gfi.gte(new BN(tokens('40000000'))), 'User 1 does not have enough tokens');
+                assert.isTrue(user2_gfi.gte(new BN(tokens('9000000'))), 'User 2 does not have enough tokens');
                 await printBalances();
-            });            
+            });
+            it('2. User 1 can transfer another 10,000,000 tokens to user 2 - taxes taken', async() => {  
+                await gfi.transfer(user2, tokens('10000000'), { from: user1, nonce: await nonce(user1) });
+                treasury_cake_old = treasury_cake;
+                lpstore_cake_old = lpstore_cake;
+                lpstore_gfi_old = lpstore_gfi;
+                await updateBalances();
+                assert.isTrue(treasury_cake.gte(treasury_cake_old), 'Treasury did not receive CAKE');
+                assert.isTrue(lpstore_cake.gte(lpstore_cake_old), 'LP store did not receive CAKE');
+                assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
+                assert.isTrue(user1_gfi.gte(new BN(tokens('30000000'))), 'User 1 does not have enough tokens');
+                assert.isTrue(user2_gfi.gte(new BN(tokens('18000000'))), 'User 2 does not have enough tokens');
+                await printBalances();
+            });
+            it('3. Deployer can disable taxes for user 1', async() => {
+                await gfi.excludeFromFee(user1, { nonce: await nonce(deployer) });
+            });
+            it('4. User 1 can transfer another 10,000,000 tokens to user 2 - no taxes taken', async() => {  
+                await gfi.transfer(user2, tokens('10000000'), { from: user1, nonce: await nonce(user1) });
+                treasury_cake_old = treasury_cake;
+                lpstore_cake_old = lpstore_cake;
+                lpstore_gfi_old = lpstore_gfi;
+                await updateBalances();
+                assert.isTrue(treasury_cake_old.eq(treasury_cake), 'Treasury received CAKE');
+                assert.isTrue(lpstore_cake_old.eq(lpstore_cake), 'LP store received CAKE');
+                assert.isTrue(lpstore_gfi_old.eq(lpstore_gfi), 'LP store received GFI');
+                assert.isTrue(user1_gfi.gte(new BN(tokens('20000000'))), 'User 1 does not have enough tokens');
+                assert.isTrue(user2_gfi.gte(new BN(tokens('28000000'))), 'User 2 does not have enough tokens');
+                await printBalances();
+            });
+            it('5. Deployer can enable taxes for user 1', async() => {
+                await gfi.includeInFee(user1, { nonce: await nonce(deployer) });
+            });
+            it('6. User 1 can transfer another 10,000,000 tokens to user 2 - taxes taken', async() => {  
+                await gfi.transfer(user2, tokens('10000000'), { from: user1, nonce: await nonce(user1) });
+                treasury_cake_old = treasury_cake;
+                lpstore_cake_old = lpstore_cake;
+                lpstore_gfi_old = lpstore_gfi;
+                await updateBalances();
+                assert.isTrue(treasury_cake.gte(treasury_cake_old), 'Treasury did not receive CAKE');
+                assert.isTrue(lpstore_cake.gte(lpstore_cake_old), 'LP store did not receive CAKE');
+                assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
+                assert.isTrue(user1_gfi.gte(new BN(tokens('10000000'))), 'User 1 does not have enough tokens');
+                assert.isTrue(user2_gfi.gte(new BN(tokens('37000000'))), 'User 2 does not have enough tokens');
+                await printBalances();
+            });
+            it('7. Deployer can disable taxes for all users', async() => {
+                await gfi.setTransferTaxEnabled(false, { nonce: await nonce(deployer) });
+            });
+            it('8. User 1 can transfer remaining tokens to user 2 - no taxes taken', async() => {  
+                await gfi.transfer(user2, user1_gfi, { from: user1, nonce: await nonce(user1) });
+                treasury_cake_old = treasury_cake;
+                lpstore_cake_old = lpstore_cake;
+                lpstore_gfi_old = lpstore_gfi;
+                await updateBalances();
+                assert.isTrue(treasury_cake_old.eq(treasury_cake), 'Treasury received CAKE');
+                assert.isTrue(lpstore_cake_old.eq(lpstore_cake), 'LP store received CAKE');
+                assert.isTrue(lpstore_gfi_old.eq(lpstore_gfi), 'LP store received GFI');
+                assert.isTrue(user1_gfi.eq(new BN(tokens('0'))), 'User 1 does not have enough tokens');
+                assert.isTrue(user2_gfi.gte(new BN(tokens('47000000'))), 'User 2 does not have enough tokens');
+                await printBalances();
+            });
         });
     });
 })

@@ -9,19 +9,20 @@ import "./interfaces/IUniswapV2Router02.sol";
 import "./utils/Address.sol";
 import "./utils/Ownable.sol";
 
-contract GorillaFi is IERC20, Ownable {
+contract CakeApe is IERC20, Ownable {
     using Address for address;
 
-    string      public name         = "GorillaFi";      // Token name
-    string      public symbol       = "G-Fi";           // Token symbol
+    string      public name         = "CAKE APE";       // Token name
+    string      public symbol       = "APE";            // Token symbol
     uint8       public decimals     = 18;               // Token decimals
-    uint256     public taxFee       = 4;                // The reflection tax rate    
-    uint256     public liquidityFee = 5;                // The liquidity tax rate
-    uint256     public marketingTax = 1;                // The marketing tax rate
+    uint256     public taxFee       = 40;               // The reflection tax rate    
+    uint256     public liquidityFee = 50;               // The liquidity tax rate
+    uint256     public marketingTax = 10;               // The marketing tax rate
     bool        public transferTaxEnabled = true;       // Flag for if the transfer tax is enabled
+    bool        public inSwap;                          // Flag for preventing swap loops
     address     public dexPair;                         // The DEX pair to add liquidity to
-    IERC20      public cake;                            // The CAKE token
     address     public treasury;                        // The treasury for sending marketing tax to  
+    address     public lpstore;                         // The LP storage wallet
 
     address[]   private excluded;                       // Array of addresses excluded from rewards
 
@@ -31,7 +32,8 @@ contract GorillaFi is IERC20, Ownable {
     uint256 private rTotal = (MAX - (MAX % tTotal));    // Total reflections
     uint256 private tFeeTotal;                          // The total fees
     
-    IUniswapV2Router02 public dexRouter;                // The DEX router for performing swaps
+    IERC20              public cake;                    // The CAKE token    
+    IUniswapV2Router02  public dexRouter;               // The DEX router for performing swaps
 
     // Variables to store tax rates while doing notax operations
     uint256 private previousTaxFee = taxFee;
@@ -51,11 +53,13 @@ contract GorillaFi is IERC20, Ownable {
     event MinTokensBeforeSwapUpdated(uint256 _minTokensBeforeSwap);
     event SwapAndLiquifyEnabledUpdated(bool _enabled);
     event SwapAndLiquify(uint256 _tokensSwapped, uint256 _ethReceived, uint256 _tokensIntoLiqudity);
-    
+    event Debug(string _data1, uint256 _data2);
+
     // Constructor for constructing things
-    constructor (address _dexRouter, address _cake) {
+    constructor (address _dexRouter, address _cake, address _treasury, address _lpstore) {
         cake = IERC20(_cake);
-        treasury = msg.sender;
+        treasury = _treasury;        
+        lpstore = _lpstore;
 
         rOwned[msg.sender] = rTotal;
         
@@ -64,7 +68,8 @@ contract GorillaFi is IERC20, Ownable {
         
         isExcludedFromFee[owner()] = true;
         isExcludedFromFee[address(this)] = true;
-        isExcludedFromFee[treasury];
+        isExcludedFromFee[treasury] = true;
+        isExcludedFromFee[lpstore] = true;
         
         emit Transfer(address(0), msg.sender, tTotal);
     }
@@ -75,6 +80,11 @@ contract GorillaFi is IERC20, Ownable {
     function setDex(address _dexRouter, address _dexPair) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
         dexPair = _dexPair;
+    }
+
+    // Function to set the LP Maker
+    function setLPStore(address _lpstore) public onlyOwner() {
+        lpstore = _lpstore;
     }
 
     // Function to set the treasury address
@@ -280,35 +290,79 @@ contract GorillaFi is IERC20, Ownable {
     
     // Function to take liquidity
     function _takeLiquidity(uint256 _tLiquidity) private {
+        uint256 startBalance = balanceOf(address(this));        
         uint256 currentRate =  _getRate();
         uint256 rLiquidity = _tLiquidity * currentRate;
-        rOwned[treasury] = rOwned[treasury] + rLiquidity;
-        if(isExcluded[treasury])
-            tOwned[treasury] = tOwned[treasury] + _tLiquidity;
+
+        uint256 rHalf = rLiquidity / 2;
+        uint256 rRemain = rLiquidity - rHalf;
+
+        rOwned[address(this)] = rOwned[address(this)] + rHalf;
+        rOwned[lpstore] = rOwned[lpstore] + rRemain;
+
+        if(isExcluded[address(this)] && isExcluded[lpstore]) {
+            uint256 tHalf = _tLiquidity / 2;
+            uint256 tRemain = _tLiquidity - tHalf;
+            tOwned[address(this)] = tOwned[address(this)] + tHalf;
+            tOwned[lpstore] = tOwned[lpstore] + tRemain;
+        }
+
+        uint256 newTokens = balanceOf(address(this)) - startBalance;
+        if (newTokens > 0 && !inSwap) {
+            inSwap = true;
+            _swapTokensForCake(newTokens, lpstore);
+            inSwap = false;
+        }
     }
 
     // Function to tax marketing tax
     function _takeMarketing(uint256 _tMarketing) private {
+        uint256 startBalance = balanceOf(address(this));
         uint256 currentRate =  _getRate();
         uint256 rMarketing = _tMarketing * currentRate;
-        rOwned[treasury] = rOwned[treasury] + rMarketing;
-        if (isExcluded[treasury])
-            tOwned[treasury] = tOwned[treasury] + _tMarketing;        
+        rOwned[address(this)] = rOwned[address(this)] + rMarketing;
+        if (isExcluded[address(this)]) {
+            tOwned[address(this)] = tOwned[address(this)] + _tMarketing;
+        }
+                    
+        uint256 newTokens = balanceOf(address(this)) - startBalance;
+        if (newTokens > 0 && !inSwap) {
+            inSwap = true;
+            _swapTokensForCake(newTokens, address(treasury));
+            inSwap = false;
+        }
+    }
+
+    // Function to handle swapping tokens for CAKE
+    function _swapTokensForCake(uint256 _tokenAmount, address _target) private {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = address(cake);
+
+        _approve(address(this), address(dexRouter), _tokenAmount);
+
+        dexRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            _tokenAmount,
+            0,
+            path,
+            _target,
+            block.timestamp
+        );
     }
     
     // Function to calculate the tax fee
     function _calculateTaxFee(uint256 _amount) private view returns (uint256) {
-        return _amount * taxFee / (10 ** 2);
+        return _amount * taxFee / (10 ** 3);
     }
 
     // Function to calculate the liquidity fee
     function _calculateLiquidityFee(uint256 _amount) private view returns (uint256) {
-        return _amount * liquidityFee / (10 ** 2);
+        return _amount * liquidityFee / (10 ** 3);
     }
 
     // Function to calculate the marketing tax
     function _calculateMarketingTax(uint256 _amount) private view returns (uint256) {
-        return _amount * marketingTax / (10 ** 2);
+        return _amount * marketingTax / (10 ** 3);
     }
     
     // Function to set all tax rates to zero
