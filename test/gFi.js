@@ -17,7 +17,7 @@ function tokens(n) {
 }
 
 contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
-    let gfi, cake, dexrouter, dexfactory, gfi_pair, cake_pair;
+    let gfi, cake, dexrouter, dexfactory, cake_pair;
     let user1_gfi, user2_gfi, treasury_cake, lpstore_cake, lpstore_gfi, treasury_cake_old, lpstore_cake_old, lpstore_gfi_old;
     let result, temp;
     let transactionCount1 = 0, transactionCount2 = 0, transactionCount3 = 0;
@@ -49,14 +49,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
         lpstore_gfi = new BN(result.toString());
     }
 
-    async function printBalances() {
-        console.log("User 1 GFI    : " + user1_gfi.toString());
-        console.log("User 2 GFI    : " + user2_gfi.toString());
-        console.log("Treasury CAKE : " + treasury_cake.toString());
-        console.log("LPStore CAKE  : " + lpstore_cake.toString());
-        console.log("LPSTORE GFI   : " + lpstore_gfi.toString());
-    }
-
     describe('G-Fi Token Test Script', async() => {
         describe('Test Environment Setup', async() => {
             it('1. Deploy fake CAKE token', async() => {       
@@ -77,7 +69,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
             });
             it('5. Deploy the G-Fi token', async() => {       
                 gfi = await GFi.new(DEXROUTER, cake.address, treasury, lpstore, { nonce: await nonce(deployer) });
-                gfi_pair = await gfi.dexPair();
             });
             it('6. Mint 1,000,000 CAKE and pair with 50,000,000 G-Fi', async() => {       
                 await cake.mint(tokens('1000000'), { nonce: await nonce(deployer) });
@@ -107,7 +98,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
                 assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
                 assert.isTrue(user1_gfi.gte(new BN(tokens('40000000'))), 'User 1 does not have enough tokens');
                 assert.isTrue(user2_gfi.gte(new BN(tokens('9000000'))), 'User 2 does not have enough tokens');
-                await printBalances();
             });
             it('2. User 1 can transfer another 10,000,000 tokens to user 2 - taxes taken', async() => {  
                 await gfi.transfer(user2, tokens('10000000'), { from: user1, nonce: await nonce(user1) });
@@ -120,7 +110,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
                 assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
                 assert.isTrue(user1_gfi.gte(new BN(tokens('30000000'))), 'User 1 does not have enough tokens');
                 assert.isTrue(user2_gfi.gte(new BN(tokens('18000000'))), 'User 2 does not have enough tokens');
-                await printBalances();
             });
             it('3. Deployer can disable taxes for user 1', async() => {
                 await gfi.excludeFromFee(user1, { nonce: await nonce(deployer) });
@@ -136,7 +125,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
                 assert.isTrue(lpstore_gfi_old.eq(lpstore_gfi), 'LP store received GFI');
                 assert.isTrue(user1_gfi.gte(new BN(tokens('20000000'))), 'User 1 does not have enough tokens');
                 assert.isTrue(user2_gfi.gte(new BN(tokens('28000000'))), 'User 2 does not have enough tokens');
-                await printBalances();
             });
             it('5. Deployer can enable taxes for user 1', async() => {
                 await gfi.includeInFee(user1, { nonce: await nonce(deployer) });
@@ -152,7 +140,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
                 assert.isTrue(lpstore_gfi.gte(lpstore_gfi_old), 'LP store did not receive GFI');
                 assert.isTrue(user1_gfi.gte(new BN(tokens('10000000'))), 'User 1 does not have enough tokens');
                 assert.isTrue(user2_gfi.gte(new BN(tokens('37000000'))), 'User 2 does not have enough tokens');
-                await printBalances();
             });
             it('7. Deployer can disable taxes for all users', async() => {
                 await gfi.setTransferTaxEnabled(false, { nonce: await nonce(deployer) });
@@ -168,7 +155,6 @@ contract('G-Fi Token', ([ deployer, user1, user2, treasury, lpstore ]) => {
                 assert.isTrue(lpstore_gfi_old.eq(lpstore_gfi), 'LP store received GFI');
                 assert.isTrue(user1_gfi.eq(new BN(tokens('0'))), 'User 1 does not have enough tokens');
                 assert.isTrue(user2_gfi.gte(new BN(tokens('47000000'))), 'User 2 does not have enough tokens');
-                await printBalances();
             });
         });
     });

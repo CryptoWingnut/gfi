@@ -20,7 +20,6 @@ contract CakeApe is IERC20, Ownable {
     uint256     public marketingTax = 10;               // The marketing tax rate
     bool        public transferTaxEnabled = true;       // Flag for if the transfer tax is enabled
     bool        public inSwap;                          // Flag for preventing swap loops
-    address     public dexPair;                         // The DEX pair to add liquidity to
     address     public treasury;                        // The treasury for sending marketing tax to  
     address     public lpstore;                         // The LP storage wallet
 
@@ -64,7 +63,7 @@ contract CakeApe is IERC20, Ownable {
         rOwned[msg.sender] = rTotal;
         
         dexRouter = IUniswapV2Router02(_dexRouter);
-        dexPair = IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _cake);
+        IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _cake);
         
         isExcludedFromFee[owner()] = true;
         isExcludedFromFee[address(this)] = true;
@@ -77,9 +76,8 @@ contract CakeApe is IERC20, Ownable {
     receive() external payable {}
 
     // Function to set the DEX router
-    function setDex(address _dexRouter, address _dexPair) public onlyOwner() {
+    function setDex(address _dexRouter) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
-        dexPair = _dexPair;
     }
 
     // Function to set the LP Maker
