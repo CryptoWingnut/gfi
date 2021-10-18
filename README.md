@@ -31,6 +31,7 @@ Call this function if you want to enable/disable the transfer taxes for everybod
 
 
 function excludeFromFee(address _account)
+
 function includeInFee(address _account)
 
 Call these functions if you want to exclude an address from paying transfer taxes, or to include on back in that has been excluded
@@ -38,7 +39,9 @@ Call these functions if you want to exclude an address from paying transfer taxe
 
 
 function setTaxFeePercent(uint256 _taxFee)
+
 function setLiquidityFeePercent(uint256 _liquidityFee)
+
 function setMarketingTax(uint256 _marketingTax)
 
 Call one of these functions to change one of the tax rates. Please note there is 1 decimal of precision so entry would be like:
@@ -53,6 +56,7 @@ Call this function if you want to change the maximum transfer size per transacti
 
 
 function excludeFromReward(address _account)
+
 function includeInReward(address _account)
 
 Call one of these functions if you want to exclude an address from receiving reflections, or to include one back in that has been removed
