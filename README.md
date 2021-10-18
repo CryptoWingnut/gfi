@@ -3,9 +3,9 @@ CAKE APE Token Guide
 
 ## DEPLOYING ##
 
-constructor (address _dexRouter, address _cake, address _treasury, address _lpstore)
+constructor (address _dexRouter, address _pairToken, address _treasury, address _lpstore)
 
-When deploying the contract you need to provide the DEX router, the addresses for the CAKE token, treasury, and the LP storage wallet
+When deploying the contract you need to provide the DEX router, the addresses for the paired token, treasury, and the LP storage wallet
 
 
 ## MANAGING ##
@@ -13,6 +13,11 @@ When deploying the contract you need to provide the DEX router, the addresses fo
 function setDex(address _dexRouter)
 
 Call this function if you want to change the DEX router that the buyback of CAKE is performed through
+
+
+function setPairedToken(address _pairedToken)
+
+Call this function when you want to change the token address of what your LP is paired with for the swap functions
 
 
 function setLPStore(address _lpstore)

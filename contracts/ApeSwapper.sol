@@ -6,7 +6,7 @@ import "./interfaces/IERC20.sol";
 import "./utils/Ownable.sol";
 
 contract ApeSwapper is Ownable {
-    IERC20  public ape;         // The CAKE APE token
+    IERC20  public ape;         // The Ape Token
     IERC20  public gfi;         // The Gorilla-FI token
     address public treasury;    // The treasury address to send G-FI to
 

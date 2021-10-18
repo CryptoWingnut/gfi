@@ -9,10 +9,10 @@ import "./interfaces/IUniswapV2Router02.sol";
 import "./utils/Address.sol";
 import "./utils/Ownable.sol";
 
-contract CakeApe is IERC20, Ownable {
+contract ApeToken is IERC20, Ownable {
     using Address for address;
 
-    string      public name         = "CAKE APE";       // Token name
+    string      public name         = "Ape Token";      // Token name
     string      public symbol       = "APE";            // Token symbol
     uint8       public decimals     = 18;               // Token decimals
     uint256     public taxFee       = 40;               // The reflection tax rate    
@@ -25,13 +25,13 @@ contract CakeApe is IERC20, Ownable {
 
     address[]   private excluded;                       // Array of addresses excluded from rewards
 
-    uint256 public maxTxAmount = 100000000 * 10 ** uint256(decimals);// The maximum transfer amount
+    uint256 public maxTxAmount = 90000000 * 10 ** uint256(decimals);// The maximum transfer amount
     uint256 private constant MAX = ~uint256(0);         // uint256 maximum
-    uint256 private tTotal = 100000000 * 10 ** uint256(decimals); // Total supply of the token
+    uint256 private tTotal = 90000000 * 10 ** uint256(decimals); // Total supply of the token
     uint256 private rTotal = (MAX - (MAX % tTotal));    // Total reflections
     uint256 private tFeeTotal;                          // The total fees
     
-    IERC20              public cake;                    // The CAKE token    
+    IERC20              public pairToken;               // The LP paired token    
     IUniswapV2Router02  public dexRouter;               // The DEX router for performing swaps
 
     // Variables to store tax rates while doing notax operations
@@ -55,15 +55,15 @@ contract CakeApe is IERC20, Ownable {
     event Debug(string _data1, uint256 _data2);
 
     // Constructor for constructing things
-    constructor (address _dexRouter, address _cake, address _treasury, address _lpstore) {
-        cake = IERC20(_cake);
+    constructor (address _dexRouter, address _pairToken, address _treasury, address _lpstore) {
+        pairToken = IERC20(_pairToken);
         treasury = _treasury;        
         lpstore = _lpstore;
 
         rOwned[msg.sender] = rTotal;
         
         dexRouter = IUniswapV2Router02(_dexRouter);
-        IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _cake);
+        IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _pairToken);
         
         isExcludedFromFee[owner()] = true;
         isExcludedFromFee[address(this)] = true;
@@ -78,6 +78,11 @@ contract CakeApe is IERC20, Ownable {
     // Function to set the DEX router
     function setDex(address _dexRouter) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
+    }
+
+    // Function to set the paired token
+    function setPairedToken(address _pairedToken) public onlyOwner() {
+        pairToken = IERC20(_pairedToken);
     }
 
     // Function to set the LP Maker
@@ -308,7 +313,7 @@ contract CakeApe is IERC20, Ownable {
         uint256 newTokens = balanceOf(address(this)) - startBalance;
         if (newTokens > 0 && !inSwap) {
             inSwap = true;
-            _swapTokensForCake(newTokens, lpstore);
+            _swapTokensForPaired(newTokens, lpstore);
             inSwap = false;
         }
     }
@@ -326,16 +331,16 @@ contract CakeApe is IERC20, Ownable {
         uint256 newTokens = balanceOf(address(this)) - startBalance;
         if (newTokens > 0 && !inSwap) {
             inSwap = true;
-            _swapTokensForCake(newTokens, address(treasury));
+            _swapTokensForPaired(newTokens, address(treasury));
             inSwap = false;
         }
     }
 
     // Function to handle swapping tokens for CAKE
-    function _swapTokensForCake(uint256 _tokenAmount, address _target) private {
+    function _swapTokensForPaired(uint256 _tokenAmount, address _target) private {
         address[] memory path = new address[](2);
         path[0] = address(this);
-        path[1] = address(cake);
+        path[1] = address(pairToken);
 
         _approve(address(this), address(dexRouter), _tokenAmount);
 
