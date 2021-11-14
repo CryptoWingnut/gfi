@@ -310,6 +310,10 @@ contract ApeToken is IERC20, Ownable {
     bool        public inSwap;                          // Flag for preventing swap loops
     address     public treasury;                        // The treasury for sending marketing tax to
     address     public lpstore;                         // The LP storage wallet
+    address     public dexPair;                         // The address of the dex pair
+
+    uint256     public pendingLiquidity;                // Amount pending to be sent for liquidity
+    uint256     public pendingMarketing;                // Amount pending to be sent for marketing
 
     address[]   private excluded;                       // Array of addresses excluded from rewards
 
@@ -351,7 +355,7 @@ contract ApeToken is IERC20, Ownable {
         rOwned[msg.sender] = rTotal;
 
         dexRouter = IUniswapV2Router02(_dexRouter);
-        IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _pairToken);
+        dexPair = IUniswapV2Factory(dexRouter.factory()).createPair(address(this), _pairToken);
 
         isExcludedFromFee[owner()] = true;
         isExcludedFromFee[address(this)] = true;
@@ -364,8 +368,9 @@ contract ApeToken is IERC20, Ownable {
     receive() external payable {}
 
     // Function to set the DEX router
-    function setDex(address _dexRouter) public onlyOwner() {
+    function setDex(address _dexRouter, address _dexPair) public onlyOwner() {
         dexRouter = IUniswapV2Router02(_dexRouter);
+        dexPair = _dexPair;
     }
 
     // Function to set the paired token
@@ -599,10 +604,9 @@ contract ApeToken is IERC20, Ownable {
         }
 
         uint256 newTokens = balanceOf(address(this)) - startBalance;
-        if (newTokens > 0 && !inSwap) {
-            inSwap = true;
-            _swapTokensForPaired(newTokens, lpstore);
-            inSwap = false;
+
+        if (newTokens > 0) {
+            pendingLiquidity += newTokens;
         }
     }
 
@@ -617,10 +621,9 @@ contract ApeToken is IERC20, Ownable {
         }
 
         uint256 newTokens = balanceOf(address(this)) - startBalance;
-        if (newTokens > 0 && !inSwap) {
-            inSwap = true;
-            _swapTokensForPaired(newTokens, address(treasury));
-            inSwap = false;
+
+        if (newTokens > 0) {
+            pendingMarketing += newTokens;
         }
     }
 
@@ -692,6 +695,24 @@ contract ApeToken is IERC20, Ownable {
         require(_amount > 0, "Transfer amount must be greater than zero");
         if(_from != owner() && _to != owner()) {
             require(_amount <= maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
+        }
+
+        if (balanceOf(address(this)) > 0 && !inSwap && _from != dexPair) {
+            inSwap = true;
+
+            if (pendingMarketing > 0) {
+                _swapTokensForPaired(pendingMarketing, treasury);
+                pendingMarketing = 0;
+            }
+
+            pendingLiquidity = balanceOf(address(this));
+
+            if (pendingLiquidity > 0) {
+                _swapTokensForPaired(pendingLiquidity, lpstore);
+                pendingLiquidity = 0;
+            }
+
+            inSwap = false;
         }
 
         bool takeFee = true;
